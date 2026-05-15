@@ -1,0 +1,21 @@
+# Compiled binaries
+mia-agent
+mia-agent.exe
+*.dll
+*.so
+*.dylib
+
+# Config contains secrets — never commit
+config.json
+
+# Go build cache
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Inno Setup output
+installer/Output/

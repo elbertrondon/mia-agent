@@ -1,0 +1,13 @@
+{
+  "mia_url": "https://your-mia-instance.com",
+  "agent_token": "your-64-char-token-from-mia-dashboard",
+  "poll_interval_seconds": 3,
+  "database": {
+    "driver": "mysql",
+    "host": "localhost",
+    "port": 3306,
+    "name": "your_database",
+    "username": "your_username",
+    "password": "your_password"
+  }
+}
