@@ -1,6 +1,6 @@
 # MIA Agent — Contexto del proyecto
 
-## Estado actual (15/05/2026)
+## Estado actual (15/05/2026 — actualizado)
 
 ### ¿Qué es esto?
 Conector ligero escrito en Go que se instala en el ordenador Windows del cliente y permite que MIA Platform consulte bases de datos en redes privadas (detrás de firewalls) sin necesidad de abrir puertos de entrada.
@@ -18,7 +18,7 @@ El agente establece únicamente conexiones **salientes** (HTTPS) hacia MIA Platf
   - `github.com/microsoft/go-mssqldb` — SQL Server
   - `modernc.org/sqlite` — SQLite (pure Go, sin CGO)
 - **Installer:** Inno Setup 6 (wizard con Pascal Script)
-- **CI/CD:** GitHub Actions — compila + empaqueta en cada tag `v*`
+- **CI/CD:** GitHub Actions — compila para los 3 OS + empaqueta en cada tag `v*`
 
 ---
 
@@ -43,7 +43,7 @@ Loop (cada 3 s)
 
 ```
 mia-agent/
-├── main.go                     — Entry point + gestión del Windows Service
+├── main.go                     — Entry point + gestión del servicio (Windows/macOS/Linux)
 ├── go.mod
 ├── config.example.json         — Plantilla de configuración para el cliente
 ├── internal/
@@ -52,10 +52,11 @@ mia-agent/
 │   ├── db/executor.go          — Ejecuta SQL + descubre schema (4 drivers)
 │   └── agent/agent.go          — Loop principal de polling
 ├── installer/
-│   └── setup.iss               — Script Inno Setup (wizard de instalación Windows)
+│   ├── setup.iss               — Script Inno Setup (wizard de instalación Windows)
+│   └── install.sh              — Script de instalación para macOS y Linux
 └── .github/
     └── workflows/
-        └── release.yml         — CI: build → installer → GitHub Release
+        └── release.yml         — CI: 3 jobs → build (5 binarios) + installer Windows + GitHub Release
 ```
 
 ---
@@ -141,20 +142,41 @@ En caso de error:
 
 ---
 
-### Installer Windows
+### Instalación por plataforma
 
-El wizard (`installer/setup.iss`) guía al cliente en 4 pantallas:
-
+#### Windows — Wizard (`installer/setup.iss`)
+El wizard guía al cliente en 4 pantallas:
 1. **MIA Platform** — URL de la instancia + Agent Token
 2. **Tipo de BD** — MySQL / PostgreSQL / SQL Server / SQLite
 3. **Conexión** — Host, Puerto (auto-rellena según driver), Nombre de BD
 4. **Credenciales** — Usuario + Contraseña *(se salta para SQLite)*
 
-Al finalizar:
-- Escribe `config.json` en `C:\Program Files\MIA Agent\`
-- Registra e inicia el **Windows Service** (`MIAAgent`) automáticamente
+Resultado: escribe `config.json` en `C:\Program Files\MIA Agent\` y registra e inicia el Windows Service automáticamente. Al desinstalar: detiene y elimina el servicio.
 
-Al desinstalar: detiene y elimina el servicio.
+#### macOS y Linux — Script (`installer/install.sh`)
+```bash
+# Opción A — One-liner (descarga desde GitHub Release)
+curl -fsSL https://github.com/elbertrondon/mia-agent/releases/latest/download/install.sh | sudo bash
+
+# Opción B — Manual (descarga binary + install.sh juntos)
+sudo bash install.sh
+```
+
+El script detecta OS y arquitectura automáticamente, pide los datos de configuración de forma interactiva, escribe `/etc/mia-agent/config.json` (permisos 600) e instala el servicio del sistema (`launchd` en macOS, `systemd` en Linux).
+
+---
+
+### Binarios publicados en cada release
+
+| Archivo | OS | Arch |
+|---|---|---|
+| `mia-agent-setup.exe` | Windows | amd64 (installer wizard) |
+| `mia-agent.exe` | Windows | amd64 (binario standalone) |
+| `mia-agent-macos-arm64` | macOS | Apple Silicon (M1/M2/M3) |
+| `mia-agent-macos-amd64` | macOS | Intel |
+| `mia-agent-linux-amd64` | Linux | x86-64 |
+| `mia-agent-linux-arm64` | Linux | ARM64 (Raspberry Pi, Graviton) |
+| `install.sh` | macOS / Linux | — |
 
 ---
 
@@ -165,10 +187,10 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-GitHub Actions (`release.yml`) se encarga en ~5 minutos:
-1. Compila `mia-agent.exe` (Windows amd64, `-ldflags "-s -w"`)
-2. Compila `mia-agent-setup.exe` con Inno Setup 6
-3. Crea el GitHub Release con el installer adjunto
+GitHub Actions (`release.yml`) ejecuta 3 jobs en paralelo (~5 min):
+1. **`build`** (ubuntu) — cross-compila los 5 binarios + copia `install.sh`
+2. **`windows-installer`** (windows) — descarga el `.exe`, compila el wizard con Inno Setup 6
+3. **`release`** — descarga todos los artefactos y crea el GitHub Release con los 7 archivos adjuntos
 
 ---
 
@@ -198,7 +220,8 @@ mia-agent.exe -config config.json
 - [x] Loop de polling + envío de resultados (`internal/agent`)
 - [x] Windows Service via `kardianos/service`
 - [x] Installer Windows con wizard de configuración (Inno Setup 6)
-- [x] Pipeline CI/CD GitHub Actions (build + release en cada tag `v*`)
+- [x] Script de instalación macOS/Linux (`install.sh`) con detección automática de OS/arch
+- [x] Pipeline CI/CD GitHub Actions — 3 jobs, 5 binarios + installer + install.sh en cada tag `v*`
 
 ---
 

@@ -8,34 +8,70 @@ on:
 permissions:
   contents: write
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 1 — Cross-compile all binaries on Linux (fast, no CGO needed)
+# ─────────────────────────────────────────────────────────────────────────────
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/setup-go@v5
         with:
           go-version: '1.22'
           cache: true
 
       - name: Get version from tag
         id: version
-        shell: pwsh
-        run: |
-          $v = "${{ github.ref_name }}".TrimStart('v')
-          echo "value=$v" >> $env:GITHUB_OUTPUT
+        run: echo "value=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      - name: Build Windows binary
-        shell: pwsh
+      - name: Build all binaries
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+          LDFLAGS: -s -w -X main.version=${{ steps.version.outputs.value }}
+          CGO_ENABLED: 0
         run: |
-          go build `
-            -ldflags="-s -w -X main.version=${{ steps.version.outputs.value }}" `
-            -o installer\mia-agent.exe `
-            .
+          GOOS=windows GOARCH=amd64  go build -ldflags="$LDFLAGS" -o dist/mia-agent.exe            .
+          GOOS=darwin  GOARCH=arm64  go build -ldflags="$LDFLAGS" -o dist/mia-agent-macos-arm64    .
+          GOOS=darwin  GOARCH=amd64  go build -ldflags="$LDFLAGS" -o dist/mia-agent-macos-amd64    .
+          GOOS=linux   GOARCH=amd64  go build -ldflags="$LDFLAGS" -o dist/mia-agent-linux-amd64    .
+          GOOS=linux   GOARCH=arm64  go build -ldflags="$LDFLAGS" -o dist/mia-agent-linux-arm64    .
+
+      - name: Copy install script to dist
+        run: cp installer/install.sh dist/install.sh && chmod +x dist/install.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: dist/
+          retention-days: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 2 — Compile Windows installer on a Windows runner (needs Inno Setup)
+# ─────────────────────────────────────────────────────────────────────────────
+  windows-installer:
+    runs-on: windows-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        shell: pwsh
+        run: echo "value=$("${{ github.ref_name }}".TrimStart('v'))" >> $env:GITHUB_OUTPUT
+
+      - name: Download binaries artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: dist
+
+      - name: Copy Windows binary to installer directory
+        shell: pwsh
+        run: Copy-Item dist\mia-agent.exe installer\mia-agent.exe
 
       - name: Install Inno Setup 6
         shell: pwsh
@@ -48,6 +84,26 @@ jobs:
           & $iscc /DMyAppVersion=${{ steps.version.outputs.value }} installer\setup.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: installer/Output/mia-agent-setup.exe
+          retention-days: 1
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Job 3 — Create GitHub Release with all assets
+# ─────────────────────────────────────────────────────────────────────────────
+  release:
+    runs-on: ubuntu-latest
+    needs: [build, windows-installer]
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -55,16 +111,56 @@ jobs:
           body: |
             ## MIA Connector Agent ${{ github.ref_name }}
 
-            ### Installation
-            1. Download `mia-agent-setup.exe`
-            2. Run as Administrator
-            3. Enter your MIA URL, Agent Token, and database credentials
-            4. Click Install — the agent registers as a Windows Service automatically
+            Connects private network databases to MIA Platform without opening inbound firewall ports.
+
+            ---
+
+            ### Windows
+            | File | Description |
+            |------|-------------|
+            | `mia-agent-setup.exe` | Installer wizard — recommended |
+            | `mia-agent.exe` | Standalone binary |
+
+            **Install:** Run `mia-agent-setup.exe` as Administrator, follow the wizard.
+
+            ---
+
+            ### macOS
+            | File | Architecture |
+            |------|-------------|
+            | `mia-agent-macos-arm64` | Apple Silicon (M1/M2/M3) |
+            | `mia-agent-macos-amd64` | Intel |
+
+            ```bash
+            curl -fsSL https://github.com/elbertrondon/mia-agent/releases/download/${{ github.ref_name }}/install.sh | sudo bash
+            ```
+            Or manually: download the binary + `install.sh`, then run `sudo bash install.sh`.
+
+            ---
+
+            ### Linux
+            | File | Architecture |
+            |------|-------------|
+            | `mia-agent-linux-amd64` | x86-64 (most servers/desktops) |
+            | `mia-agent-linux-arm64` | ARM64 (Raspberry Pi, AWS Graviton) |
+
+            ```bash
+            curl -fsSL https://github.com/elbertrondon/mia-agent/releases/download/${{ github.ref_name }}/install.sh | sudo bash
+            ```
+
+            ---
 
             ### Requirements
-            - Windows 10 / Server 2016 or newer
-            - Administrator privileges (for service installation)
-            - Network access to your MIA Platform instance
-          files: installer/Output/mia-agent-setup.exe
+            - **Windows:** 10 / Server 2016 or newer, Administrator privileges
+            - **macOS:** 12 Monterey or newer, sudo access
+            - **Linux:** systemd-based distro (Ubuntu 20.04+, Debian 11+, RHEL 8+), sudo access
+          files: |
+            release-assets/mia-agent-setup.exe
+            release-assets/mia-agent.exe
+            release-assets/mia-agent-macos-arm64
+            release-assets/mia-agent-macos-amd64
+            release-assets/mia-agent-linux-amd64
+            release-assets/mia-agent-linux-arm64
+            release-assets/install.sh
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
