@@ -1,0 +1,70 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Get version from tag
+        id: version
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          echo "value=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build Windows binary
+        shell: pwsh
+        run: |
+          go build `
+            -ldflags="-s -w -X main.version=${{ steps.version.outputs.value }}" `
+            -o installer\mia-agent.exe `
+            .
+
+      - name: Install Inno Setup 6
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc /DMyAppVersion=${{ steps.version.outputs.value }} installer\setup.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "MIA Agent ${{ github.ref_name }}"
+          body: |
+            ## MIA Connector Agent ${{ github.ref_name }}
+
+            ### Installation
+            1. Download `mia-agent-setup.exe`
+            2. Run as Administrator
+            3. Enter your MIA URL, Agent Token, and database credentials
+            4. Click Install — the agent registers as a Windows Service automatically
+
+            ### Requirements
+            - Windows 10 / Server 2016 or newer
+            - Administrator privileges (for service installation)
+            - Network access to your MIA Platform instance
+          files: installer/Output/mia-agent-setup.exe
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
